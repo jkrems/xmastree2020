@@ -1,5 +1,7 @@
 globalThis.treeShowDelayMs = 250;
 
+
+
 function createShader(gl, type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -17,15 +19,7 @@ function loadVertices() {
   const text = document.querySelector('pre.coords').textContent;
   const lines = text.split(/\n/g).filter(Boolean).map(line => JSON.parse(line));
 
-  const vertices = new Float32Array(lines.length * 3);
-  for (let i = 0; i < lines.length; ++i) {
-    const offset = i * 3;
-    vertices[offset + 0] = lines[i][1] * 0.005;
-    vertices[offset + 1] = lines[i][2] * 0.005;
-    vertices[offset + 2] = lines[i][0] * 0.005;
-  }
-
-  return vertices;
+  return lines;
 }
 
 /**
@@ -61,7 +55,11 @@ async function runProgram() {
   /**
    * Load initial data:
    */
-  const coordsSource = await fetch('../coords.txt').then(res => res.text());
+
+
+  const coordsSource = await fetch('../coords.txt')
+    .then(res => res.text())
+
   document.querySelector('pre.coords').textContent = coordsSource + '\n';
 
   if (location.hash.length > 1) {
@@ -81,25 +79,81 @@ async function runProgram() {
 
   /** @type {HTMLCanvasElement} */
   const preview = document.getElementById('preview');
-  const gl = preview.getContext('webgl');
-  gl.enable(gl.DEPTH_TEST);
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  
 
-  const program = gl.createProgram();
-  {
-    const vertexShaderSource = document.getElementById('vshader').text;
-    const fragmentShaderSource = document.getElementById('fshader').text;
-    const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
-    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
-    gl.attachShader(program, vertexShader);
-    gl.attachShader(program, fragmentShader);
-    gl.linkProgram(program);
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color( 0x0 );
+  var camera = new THREE.PerspectiveCamera( 75, preview.clientWidth/preview.clientHeight, 0.1, 2000 );
 
-    gl.bindAttribLocation(program, 0, 'pos');
-    gl.bindAttribLocation(program, 1, 'colorIn');
+  var renderer = new THREE.WebGLRenderer();
+
+  const controls = new OrbitControls( camera, preview );
+  
+  renderer.setSize( preview.clientWidth, preview.clientHeight );
+  preview.appendChild( renderer.domElement );
+
+  // Auto resize preview renderer.
+  const resizeObserver = new ResizeObserver(entries => {
+    preview.width = preview.clientWidth
+    preview.height = preview.clientHeight
+    renderer.setSize( preview.clientWidth, preview.clientHeight );
+  });
+  resizeObserver.observe( preview );
+
+  //camera.position.y = -800;
+  //camera.rotation.x = Math.PI/2;
+  camera.position.set(-800, 480, 140)
+  controls.update();
+  controls.autoRotate = true;
+  
+  var maxBrightness = 50;
+  controls.autoRotateSpeed = -2;
+
+  
+
+  vertices.forEach(([x, z, y]) => {
+    var geometry = new THREE.SphereGeometry(3);
+    geometry.translate(x, y, z);
+    var material = new THREE.MeshBasicMaterial( { color: 0x000000 } );
+    var sphere = new THREE.Mesh( geometry, material );
+    scene.add( sphere );
+  })
+
+  const material = new THREE.LineBasicMaterial({
+    color: 0x00FF00
+  });
+  for (var i = 0; i < 7; i++) {
+    const points = [];
+    points.push( new THREE.Vector3( -300, -450, i*100 - 300 ) );
+    points.push( new THREE.Vector3( 300, -450, i*100 - 300 ) );
+
+    const geometry = new THREE.BufferGeometry().setFromPoints( points );
+
+    const line = new THREE.Line( geometry, material.clone() );
+    scene.add( line );
   }
-  gl.useProgram(program);
+
+  for (var i = 0; i < 7; i++) {
+    const points = [];
+    points.push( new THREE.Vector3( i*100 - 300, -450,  -300) );
+    points.push( new THREE.Vector3( i*100 - 300, -450, 300 ) );
+
+    const geometry = new THREE.BufferGeometry().setFromPoints( points );
+
+    const line = new THREE.Line( geometry, material.clone() );
+    scene.add( line );
+  }
+  
+
+  var animate = function () {
+    requestAnimationFrame( animate );
+
+    controls.update();
+  
+    renderer.render( scene, camera );
+  };
+
+  animate();
 
   let lastColors = new Uint8Array(500 * 4);
 
@@ -110,42 +164,16 @@ async function runProgram() {
    */
   function renderPixels(colors) {
     lastColors = colors;
+    colors.forEach(({r,g,b}, i) => {
+      let { material } = scene.children[i];
+      
+      if(material) {
 
-    gl.viewport(0, 0,
-      gl.drawingBufferWidth, gl.drawingBufferHeight);
-    gl.clearColor(0.05, 0.05, 0.05, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+        material.color.setRGB(r/maxBrightness, g/maxBrightness, b/maxBrightness)
+        material.needsUpdate = true;
+      }
 
-    const vMatrixLoc = gl.getUniformLocation(program, 'vMatrix');
-    var cos = Math.cos(angleZ);
-    var sin = Math.sin(angleZ);
-    gl.uniformMatrix4fv(vMatrixLoc, false, [
-      cos, 0, sin, 0,
-      0, 1, 0, 0,
-      -sin, 0, cos, 0,
-      0, 0, 0, 1,
-    ]);
-
-    const colorOffset = vertices.byteLength;
-
-    const buffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, colorOffset + colors.byteLength, gl.STATIC_DRAW);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, vertices);
-    gl.bufferSubData(gl.ARRAY_BUFFER, colorOffset, colors);
-
-    const verticesLoc = gl.getAttribLocation(program, 'pos');
-    gl.vertexAttribPointer(verticesLoc, 3, gl.FLOAT, false, 0, 0);
-    gl.enableVertexAttribArray(verticesLoc);
-    const colorsLoc = gl.getAttribLocation(program, 'colorIn');
-    gl.vertexAttribPointer(colorsLoc, 4, gl.UNSIGNED_BYTE, true, 0, colorOffset);
-    gl.enableVertexAttribArray(colorsLoc);
-
-    const locPointSize = gl.getUniformLocation(program, 'pointSize');
-    gl.uniform1f(locPointSize, 2.0);
-    gl.drawArrays(gl.POINTS, 0, vertices.length / 3);
-
-    gl.deleteBuffer(buffer);
+    })
   }
   globalThis.renderPixels = renderPixels;
 
@@ -165,18 +193,17 @@ var $builtinmodule = ${function () {
       self.pixelCount = pixelCount;
       // console.log({kwargs});
       // self.autoWrite = kwargs['auto_write'] ?? false;
-      self.pixels = new Uint8Array(Sk.ffi.remapToJs(pixelCount) * 4);
+      self.pixels = new Array(Sk.ffi.remapToJs(pixelCount));
     }
     initNeoPixel['co_kwargs'] = true;
     $loc.__init__ = new Sk.builtin.func(initNeoPixel);
 
     $loc.__setitem__ = new Sk.builtin.func((self, offset, value) => {
-      const [r, g, b] = Sk.ffi.remapToJs(value);
-      const scaledOffset = Sk.ffi.remapToJs(offset) * 4;
-      self.pixels[scaledOffset + 1] = r;
-      self.pixels[scaledOffset + 0] = g;
-      self.pixels[scaledOffset + 2] = b;
-      self.pixels[scaledOffset + 3] = 255; // alpha
+      const [g, r, b] = Sk.ffi.remapToJs(value);
+      const scaledOffset = Sk.ffi.remapToJs(offset);
+      
+      self.pixels[scaledOffset] = { r, g, b };
+      
       return value;
     });
 
@@ -255,30 +282,34 @@ var $builtinmodule = ${function () {
   handleRunButtonClick();
 
   let shouldRotate = false;
-  document.getElementById('rotate-check').addEventListener('click', (e) => {
-    if (shouldRotate) {
-      shouldRotate = false;
-      return;
-    }
+  document.getElementById('rotate-check').addEventListener('change', (e) => {
+    
+    let { target: { checked }} = e;
 
-    let lastT = 0;
-    shouldRotate = true;
-    function doRotate(t) {
-      if (!shouldRotate) return;
+    controls.autoRotate = checked;
+    
+  });
 
-      if (lastT === 0) {
-        lastT = t;
-      } else {
-        const dt = t - lastT;
-        lastT = t;
+  document.getElementById('rotation-speed').addEventListener('change', (e) => {
+    
+    let { target: { value }} = e;
 
-        const scaledInc = dt * 0.001;
-        angleZ = (angleZ + scaledInc) % 360;
-        renderPixels(lastColors);
-      }
-      requestAnimationFrame(doRotate);
-    }
-    requestAnimationFrame(doRotate);
+    controls.autoRotateSpeed = Number(value)
+    
+  });
+
+  document.getElementById('max-brightness').addEventListener('change', (e) => {
+    
+    let { target: { value }} = e;
+
+    maxBrightness = Number(value)
+  });
+
+  document.getElementById('background-color').addEventListener('change', (e) => {
+    
+    let { target: { value }} = e;
+    //debugger;
+    scene.background.setHex(parseInt(value.replace("#", "0x")))
   });
 
   document.getElementById('play-btn').addEventListener('click', (e) => {
